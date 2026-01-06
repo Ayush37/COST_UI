@@ -1,5 +1,6 @@
 """
 EMR Service for cluster operations
+Supports both Instance Groups and Instance Fleets configurations
 """
 import re
 import boto3
@@ -49,8 +50,16 @@ class EMRService:
             # Classify cluster
             cluster_type = self._classify_cluster(cluster['Name'], runtime_hours)
 
-            # Get instance groups
-            instance_groups = self._get_instance_groups(cluster_id)
+            # Determine if cluster uses Instance Fleets or Instance Groups
+            instance_collection_type = cluster.get('InstanceCollectionType', 'INSTANCE_GROUP')
+
+            # Get instances based on collection type
+            if instance_collection_type == 'INSTANCE_FLEET':
+                instance_groups = self._get_instance_fleets(cluster_id)
+                uses_fleets = True
+            else:
+                instance_groups = self._get_instance_groups(cluster_id)
+                uses_fleets = False
 
             return {
                 'id': cluster_id,
@@ -59,7 +68,9 @@ class EMRService:
                 'created_time': created_time.isoformat() if created_time else None,
                 'runtime_hours': runtime_hours,
                 'cluster_type': cluster_type,
-                'instance_groups': instance_groups,
+                'instance_collection_type': instance_collection_type,
+                'uses_fleets': uses_fleets,
+                'instance_groups': instance_groups,  # Unified structure for both fleets and groups
                 'normalized_instance_hours': cluster.get('NormalizedInstanceHours', 0),
                 'release_label': cluster.get('ReleaseLabel', 'Unknown'),
                 'applications': [app['Name'] for app in cluster.get('Applications', [])],
@@ -102,7 +113,7 @@ class EMRService:
         return 'TRANSIENT'
 
     def _get_instance_groups(self, cluster_id: str) -> List[Dict]:
-        """Get instance groups for a cluster"""
+        """Get instance groups for a cluster (traditional configuration)"""
         instance_groups = []
 
         try:
@@ -121,12 +132,64 @@ class EMRService:
                     'running_count': group.get('RunningInstanceCount', 0),
                     'market': group.get('Market', 'ON_DEMAND'),
                     'state': group['Status']['State'],
-                    'ec2_instances': ec2_instances
+                    'ec2_instances': ec2_instances,
+                    'is_fleet': False
                 })
         except Exception as e:
             print(f"Error getting instance groups for {cluster_id}: {e}")
 
         return instance_groups
+
+    def _get_instance_fleets(self, cluster_id: str) -> List[Dict]:
+        """Get instance fleets for a cluster (fleet configuration)"""
+        instance_fleets = []
+
+        try:
+            response = self.emr_client.list_instance_fleets(ClusterId=cluster_id)
+
+            for fleet in response['InstanceFleets']:
+                # Get EC2 instance IDs for this fleet
+                ec2_instances, instance_type_counts = self._get_ec2_instances_for_fleet(
+                    cluster_id, fleet['Id']
+                )
+
+                # Determine the primary instance type (most common in the fleet)
+                primary_instance_type = self._get_primary_instance_type(
+                    fleet, instance_type_counts
+                )
+
+                # Get all instance types configured in the fleet
+                instance_type_specs = []
+                for spec in fleet.get('InstanceTypeSpecifications', []):
+                    instance_type_specs.append({
+                        'instance_type': spec['InstanceType'],
+                        'weighted_capacity': spec.get('WeightedCapacity', 1),
+                        'bid_price': spec.get('BidPrice'),
+                        'bid_price_as_percentage': spec.get('BidPriceAsPercentageOfOnDemandPrice')
+                    })
+
+                instance_fleets.append({
+                    'id': fleet['Id'],
+                    'name': fleet.get('Name', fleet['InstanceFleetType']),
+                    'type': fleet['InstanceFleetType'],  # MASTER, CORE, TASK
+                    'instance_type': primary_instance_type,  # Primary/most common type
+                    'instance_type_specs': instance_type_specs,  # All configured types
+                    'requested_count': fleet.get('TargetOnDemandCapacity', 0) + fleet.get('TargetSpotCapacity', 0),
+                    'running_count': fleet.get('ProvisionedOnDemandCapacity', 0) + fleet.get('ProvisionedSpotCapacity', 0),
+                    'target_on_demand': fleet.get('TargetOnDemandCapacity', 0),
+                    'target_spot': fleet.get('TargetSpotCapacity', 0),
+                    'provisioned_on_demand': fleet.get('ProvisionedOnDemandCapacity', 0),
+                    'provisioned_spot': fleet.get('ProvisionedSpotCapacity', 0),
+                    'market': 'MIXED' if fleet.get('TargetSpotCapacity', 0) > 0 else 'ON_DEMAND',
+                    'state': fleet['Status']['State'],
+                    'ec2_instances': ec2_instances,
+                    'instance_type_counts': instance_type_counts,  # Count per instance type
+                    'is_fleet': True
+                })
+        except Exception as e:
+            print(f"Error getting instance fleets for {cluster_id}: {e}")
+
+        return instance_fleets
 
     def _get_ec2_instances_for_group(self, cluster_id: str, instance_group_id: str) -> List[str]:
         """Get EC2 instance IDs for an instance group"""
@@ -146,6 +209,55 @@ class EMRService:
             print(f"Error getting EC2 instances for group {instance_group_id}: {e}")
 
         return ec2_instances
+
+    def _get_ec2_instances_for_fleet(self, cluster_id: str, fleet_id: str) -> tuple:
+        """
+        Get EC2 instance IDs for an instance fleet.
+        Returns tuple of (list of instance IDs, dict of instance type counts)
+        """
+        ec2_instances = []
+        instance_type_counts = {}
+
+        try:
+            paginator = self.emr_client.get_paginator('list_instances')
+            for page in paginator.paginate(
+                ClusterId=cluster_id,
+                InstanceFleetId=fleet_id,
+                InstanceStates=['RUNNING']
+            ):
+                for instance in page['Instances']:
+                    if 'Ec2InstanceId' in instance:
+                        ec2_instances.append(instance['Ec2InstanceId'])
+
+                        # Track instance type counts
+                        inst_type = instance.get('InstanceType', 'unknown')
+                        instance_type_counts[inst_type] = instance_type_counts.get(inst_type, 0) + 1
+        except Exception as e:
+            print(f"Error getting EC2 instances for fleet {fleet_id}: {e}")
+
+        return ec2_instances, instance_type_counts
+
+    def _get_primary_instance_type(self, fleet: Dict, instance_type_counts: Dict) -> str:
+        """
+        Determine the primary instance type for a fleet.
+        Uses the most common running instance type, or first configured type.
+        """
+        # If we have running instances, use the most common type
+        if instance_type_counts:
+            return max(instance_type_counts, key=instance_type_counts.get)
+
+        # Otherwise, use the first instance type from specifications
+        specs = fleet.get('InstanceTypeSpecifications', [])
+        if specs:
+            return specs[0]['InstanceType']
+
+        # Fallback to launch specifications
+        launch_specs = fleet.get('LaunchSpecifications', {})
+        on_demand_spec = launch_specs.get('OnDemandSpecification', {})
+        if on_demand_spec:
+            return 'on-demand-fleet'
+
+        return 'unknown'
 
     def get_cluster_by_id(self, cluster_id: str) -> Optional[Dict]:
         """Get a specific cluster by ID"""

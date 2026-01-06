@@ -72,14 +72,29 @@ function renderClusters() {
 function createClusterCard(cluster) {
     const instanceGroups = cluster.instance_groups
         .filter(g => g.type !== 'MASTER')
-        .map(g => `
-            <span class="instance-group-tag ${g.type.toLowerCase()}">
-                ${g.type}: ${g.running_count}x ${g.instance_type}
-            </span>
-        `).join('');
+        .map(g => {
+            // Handle instance fleets with multiple instance types
+            if (g.is_fleet && g.instance_type_counts && Object.keys(g.instance_type_counts).length > 0) {
+                const typeBreakdown = Object.entries(g.instance_type_counts)
+                    .map(([type, count]) => `${count}x ${type}`)
+                    .join(', ');
+                return `
+                    <span class="instance-group-tag ${g.type.toLowerCase()}">
+                        ${g.type}: ${typeBreakdown}
+                        <i class="bi bi-layers ms-1" title="Instance Fleet"></i>
+                    </span>
+                `;
+            }
+            return `
+                <span class="instance-group-tag ${g.type.toLowerCase()}">
+                    ${g.type}: ${g.running_count}x ${g.instance_type}
+                </span>
+            `;
+        }).join('');
 
     const runtimeFormatted = formatRuntime(cluster.runtime_hours);
     const statusClass = cluster.state.toLowerCase();
+    const fleetBadge = cluster.uses_fleets ? '<span class="badge bg-secondary ms-2">Fleet</span>' : '';
 
     return `
         <div class="cluster-item" data-cluster-id="${cluster.id}">
@@ -88,6 +103,7 @@ function createClusterCard(cluster) {
                     <div class="d-flex align-items-center gap-2">
                         <span class="cluster-name">${escapeHtml(cluster.name)}</span>
                         <span class="status-badge ${statusClass}">${cluster.state}</span>
+                        ${fleetBadge}
                     </div>
                     <div class="cluster-id">${cluster.id}</div>
                     <div class="cluster-meta">
