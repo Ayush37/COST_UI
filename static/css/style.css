@@ -176,6 +176,34 @@ body {
     color: #856404;
 }
 
+.status-badge.terminated {
+    background-color: #e9ecef;
+    color: #495057;
+}
+
+.status-badge.terminated-with-errors {
+    background-color: #f8d7da;
+    color: #721c24;
+}
+
+/* Terminated Cluster Items */
+.cluster-item.terminated {
+    background-color: #fafafa;
+    border-left: 3px solid #6c757d;
+}
+
+.cluster-item.terminated:hover {
+    background-color: #f1f3f5;
+}
+
+.cluster-item.terminated .cluster-name {
+    color: #495057;
+}
+
+.cluster-item.terminated .cluster-id {
+    color: #868e96;
+}
+
 /* Analysis Modal */
 .analysis-section {
     background-color: #f8f9fa;

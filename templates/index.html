@@ -148,6 +148,26 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Recently Terminated Clusters -->
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <div>
+                        <i class="bi bi-stop-circle me-2 text-secondary"></i>
+                        <strong>Recently Terminated Clusters</strong>
+                        <span class="badge bg-secondary ms-2" id="terminated-badge">0</span>
+                    </div>
+                    <small class="text-muted">Terminated in last 3 hours - Historical metrics available</small>
+                </div>
+                <div class="card-body p-0">
+                    <div id="terminated-clusters-list" class="cluster-list">
+                        <div class="empty-state text-center py-5">
+                            <i class="bi bi-inbox text-muted" style="font-size: 2rem;"></i>
+                            <p class="text-muted mt-2">No recently terminated clusters</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 

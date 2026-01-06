@@ -34,28 +34,49 @@ def get_lookback_options():
 @app.route('/api/clusters', methods=['GET'])
 def get_clusters():
     """
-    Get all running EMR clusters.
-    Returns clusters segregated by type (TRANSIENT, LONG_RUNNING).
+    Get all EMR clusters including running and recently terminated.
+    Returns clusters segregated by type (TRANSIENT, LONG_RUNNING) and state.
+
+    Query params:
+        include_terminated: Include clusters terminated in last 3 hours (default: true)
     """
     try:
-        clusters = emr_service.list_running_clusters()
+        # Get running clusters
+        running_clusters = emr_service.list_running_clusters()
 
-        # Segregate by type
-        transient_clusters = [c for c in clusters if c['cluster_type'] == 'TRANSIENT']
-        long_running_clusters = [c for c in clusters if c['cluster_type'] == 'LONG_RUNNING']
+        # Check if we should include terminated clusters
+        include_terminated = request.args.get('include_terminated', 'true').lower() == 'true'
+
+        terminated_clusters = []
+        if include_terminated:
+            terminated_clusters = emr_service.list_recently_terminated_clusters(hours=3)
+
+        # Segregate running clusters by type
+        transient_clusters = [c for c in running_clusters if c['cluster_type'] == 'TRANSIENT']
+        long_running_clusters = [c for c in running_clusters if c['cluster_type'] == 'LONG_RUNNING']
+
+        # Segregate terminated clusters by type
+        terminated_transient = [c for c in terminated_clusters if c['cluster_type'] == 'TRANSIENT']
+        terminated_long_running = [c for c in terminated_clusters if c['cluster_type'] == 'LONG_RUNNING']
 
         # Sort by runtime
         transient_clusters.sort(key=lambda x: x['runtime_hours'], reverse=True)
         long_running_clusters.sort(key=lambda x: x['runtime_hours'], reverse=True)
+        terminated_transient.sort(key=lambda x: x['runtime_hours'], reverse=True)
+        terminated_long_running.sort(key=lambda x: x['runtime_hours'], reverse=True)
 
         return jsonify({
             'success': True,
             'data': {
                 'transient': transient_clusters,
                 'long_running': long_running_clusters,
-                'total_count': len(clusters),
+                'terminated': terminated_transient + terminated_long_running,
+                'terminated_transient': terminated_transient,
+                'terminated_long_running': terminated_long_running,
+                'total_count': len(running_clusters),
                 'transient_count': len(transient_clusters),
-                'long_running_count': len(long_running_clusters)
+                'long_running_count': len(long_running_clusters),
+                'terminated_count': len(terminated_clusters)
             }
         })
     except Exception as e:

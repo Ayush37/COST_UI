@@ -76,6 +76,7 @@ async function refreshClusters() {
 function renderClusters() {
     const transientList = document.getElementById('transient-clusters-list');
     const longRunningList = document.getElementById('long-running-clusters-list');
+    const terminatedList = document.getElementById('terminated-clusters-list');
 
     // Render transient clusters
     if (clustersData.transient.length > 0) {
@@ -91,9 +92,17 @@ function renderClusters() {
         longRunningList.innerHTML = createEmptyState('No long running clusters');
     }
 
+    // Render terminated clusters
+    if (clustersData.terminated && clustersData.terminated.length > 0) {
+        terminatedList.innerHTML = clustersData.terminated.map(cluster => createClusterCard(cluster, true)).join('');
+    } else {
+        terminatedList.innerHTML = createEmptyState('No recently terminated clusters');
+    }
+
     // Update badges
     document.getElementById('transient-badge').textContent = clustersData.transient_count;
     document.getElementById('long-running-badge').textContent = clustersData.long_running_count;
+    document.getElementById('terminated-badge').textContent = clustersData.terminated_count || 0;
 
     // Show container
     document.getElementById('loading-state').classList.add('d-none');
@@ -103,7 +112,7 @@ function renderClusters() {
 /**
  * Create cluster card HTML
  */
-function createClusterCard(cluster) {
+function createClusterCard(cluster, isTerminated = false) {
     const instanceGroups = cluster.instance_groups
         .filter(g => g.type !== 'MASTER')
         .map(g => {
@@ -119,36 +128,62 @@ function createClusterCard(cluster) {
                     </span>
                 `;
             }
+            // For terminated clusters, use requested_count if running_count is 0
+            const instanceCount = g.running_count || g.requested_count || 0;
             return `
                 <span class="instance-group-tag ${g.type.toLowerCase()}">
-                    ${g.type}: ${g.running_count}x ${g.instance_type}
+                    ${g.type}: ${instanceCount}x ${g.instance_type}
                 </span>
             `;
         }).join('');
 
     const runtimeFormatted = formatRuntime(cluster.runtime_hours);
-    const statusClass = cluster.state.toLowerCase();
+    const statusClass = cluster.state.toLowerCase().replace('_', '-');
     const fleetBadge = cluster.uses_fleets ? '<span class="badge bg-secondary ms-2">Fleet</span>' : '';
+
+    // For terminated clusters, show termination info
+    let terminationInfo = '';
+    if (isTerminated && cluster.termination_reason) {
+        const reasonCode = cluster.termination_reason.code || 'UNKNOWN';
+        const reasonBadgeClass = reasonCode === 'ALL_STEPS_COMPLETED' ? 'bg-success' :
+                                 reasonCode === 'USER_REQUEST' ? 'bg-info' : 'bg-warning';
+        terminationInfo = `
+            <div class="mt-2 small">
+                <span class="badge ${reasonBadgeClass}">${reasonCode.replace(/_/g, ' ')}</span>
+                ${cluster.end_time ? `<span class="text-muted ms-2">Ended: ${formatDateTime(cluster.end_time)}</span>` : ''}
+            </div>
+        `;
+    }
 
     // Generate lookback options dropdown
     const lookbackOptionsHtml = lookbackOptions.map(opt =>
         `<option value="${opt.hours}" ${opt.hours === defaultLookbackHours ? 'selected' : ''}>${opt.label}</option>`
     ).join('');
 
+    // For terminated clusters, suggest analyzing the full runtime or last 3 hours
+    const defaultLookback = isTerminated ? Math.min(cluster.runtime_hours, 72) : defaultLookbackHours;
+    const lookbackOptionsHtmlForCluster = lookbackOptions.map(opt => {
+        const selected = isTerminated
+            ? (opt.hours <= cluster.runtime_hours && opt.hours === Math.max(...lookbackOptions.filter(o => o.hours <= cluster.runtime_hours).map(o => o.hours)))
+            : (opt.hours === defaultLookbackHours);
+        return `<option value="${opt.hours}" ${selected ? 'selected' : ''}>${opt.label}</option>`;
+    }).join('');
+
     return `
-        <div class="cluster-item" data-cluster-id="${cluster.id}">
+        <div class="cluster-item ${isTerminated ? 'terminated' : ''}" data-cluster-id="${cluster.id}">
             <div class="d-flex justify-content-between align-items-start">
                 <div class="flex-grow-1">
                     <div class="d-flex align-items-center gap-2">
                         <span class="cluster-name">${escapeHtml(cluster.name)}</span>
-                        <span class="status-badge ${statusClass}">${cluster.state}</span>
+                        <span class="status-badge ${statusClass}">${cluster.state.replace('_', ' ')}</span>
                         ${fleetBadge}
+                        ${cluster.cluster_type ? `<span class="badge bg-light text-dark">${cluster.cluster_type}</span>` : ''}
                     </div>
                     <div class="cluster-id">${cluster.id}</div>
                     <div class="cluster-meta">
                         <span class="cluster-meta-item">
                             <i class="bi bi-clock"></i>
-                            ${runtimeFormatted}
+                            ${runtimeFormatted}${isTerminated ? ' (total)' : ''}
                         </span>
                         <span class="cluster-meta-item">
                             <i class="bi bi-tag"></i>
@@ -159,6 +194,7 @@ function createClusterCard(cluster) {
                             ${cluster.applications.join(', ') || 'N/A'}
                         </span>
                     </div>
+                    ${terminationInfo}
                     <div class="mt-2">
                         ${instanceGroups}
                     </div>
@@ -166,18 +202,26 @@ function createClusterCard(cluster) {
                 <div class="cluster-actions d-flex flex-column gap-2 align-items-end">
                     <div class="d-flex align-items-center gap-2">
                         <select class="form-select form-select-sm lookback-select" id="lookback-${cluster.id}" style="width: auto;">
-                            ${lookbackOptionsHtml}
+                            ${lookbackOptionsHtmlForCluster}
                         </select>
-                        <button class="btn btn-primary btn-analyze" onclick="analyzeCluster('${cluster.id}')">
+                        <button class="btn ${isTerminated ? 'btn-outline-primary' : 'btn-primary'} btn-analyze" onclick="analyzeCluster('${cluster.id}')">
                             <i class="bi bi-graph-up me-1"></i>
                             Analyze
                         </button>
                     </div>
-                    <small class="text-muted">Analysis period</small>
+                    <small class="text-muted">${isTerminated ? 'Historical analysis' : 'Analysis period'}</small>
                 </div>
             </div>
         </div>
     `;
+}
+
+/**
+ * Format datetime for display
+ */
+function formatDateTime(isoString) {
+    const date = new Date(isoString);
+    return date.toLocaleString();
 }
 
 /**
@@ -787,7 +831,11 @@ function updatePotentialSavings(analysis) {
  */
 function findCluster(clusterId) {
     if (!clustersData) return null;
-    const all = [...clustersData.transient, ...clustersData.long_running];
+    const all = [
+        ...clustersData.transient,
+        ...clustersData.long_running,
+        ...(clustersData.terminated || [])
+    ];
     return all.find(c => c.id === clusterId);
 }
 
