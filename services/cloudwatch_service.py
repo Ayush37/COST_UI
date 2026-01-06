@@ -134,7 +134,7 @@ class CloudWatchService:
 
         # Detect if P95 is a spike (large gap between P90 and P95)
         spike_gap = p95_value - p90_value
-        is_spike = spike_gap > config.SPIKE_DETECTION_GAP_PERCENT
+        is_spike = bool(spike_gap > config.SPIKE_DETECTION_GAP_PERCENT)
 
         # Determine sustained peak and which percentile to use for sizing
         # Check if P95 was sustained for at least the threshold duration
@@ -269,29 +269,29 @@ class CloudWatchService:
         if not averages:
             return self._empty_metrics()
 
-        # Calculate aggregated basic stats
-        avg_value = np.mean(averages)
-        p75_value = np.mean(p75_values) if p75_values else np.percentile(averages, 75)
-        p90_value = np.mean(p90_values) if p90_values else np.percentile(averages, 90)
-        p95_value = np.mean(p95_values) if p95_values else np.percentile(averages, 95)
-        p99_value = np.mean(p99_values) if p99_values else np.percentile(averages, 99)
-        effective_peak = np.mean(effective_peaks) if effective_peaks else p95_value
+        # Calculate aggregated basic stats (convert to native Python floats for JSON serialization)
+        avg_value = float(np.mean(averages))
+        p75_value = float(np.mean(p75_values) if p75_values else np.percentile(averages, 75))
+        p90_value = float(np.mean(p90_values) if p90_values else np.percentile(averages, 90))
+        p95_value = float(np.mean(p95_values) if p95_values else np.percentile(averages, 95))
+        p99_value = float(np.mean(p99_values) if p99_values else np.percentile(averages, 99))
+        effective_peak = float(np.mean(effective_peaks) if effective_peaks else p95_value)
 
         # Aggregate duration above thresholds
         duration_above = {}
         for threshold in config.UTILIZATION_THRESHOLDS:
             durations = [m.get('duration_above', {}).get(threshold, 0) for m in instance_metrics]
             if durations:
-                duration_above[threshold] = round(np.mean(durations), 1)
+                duration_above[threshold] = round(float(np.mean(durations)), 1)
 
         # Aggregate duration at P95
         duration_at_p95_list = [m.get('duration_at_p95_minutes', 0) for m in instance_metrics]
-        duration_at_p95_avg = np.mean(duration_at_p95_list) if duration_at_p95_list else 0
+        duration_at_p95_avg = float(np.mean(duration_at_p95_list)) if duration_at_p95_list else 0
 
         # Determine aggregate spike detection
         spike_gaps = [m.get('spike_gap', 0) for m in instance_metrics if m.get('spike_gap') is not None]
-        avg_spike_gap = np.mean(spike_gaps) if spike_gaps else 0
-        is_spike = avg_spike_gap > config.SPIKE_DETECTION_GAP_PERCENT
+        avg_spike_gap = float(np.mean(spike_gaps)) if spike_gaps else 0
+        is_spike = bool(avg_spike_gap > config.SPIKE_DETECTION_GAP_PERCENT)
 
         # Determine aggregate peak type based on most common type
         peak_types = [m.get('peak_type') for m in instance_metrics if m.get('peak_type')]
