@@ -224,21 +224,24 @@ class AnalyzerService:
         """
         Determine if the instance group is oversized, right-sized, or undersized.
         Uses the HIGHER of CPU and Memory utilization.
+        Now uses effective_peak (sustained) instead of raw P95 for more accurate sizing.
         """
         # Get the higher utilization metric
         cpu_avg = metrics['cpu'].get('average', 0) or 0
-        cpu_p95 = metrics['cpu'].get('p95', 0) or 0
         mem_avg = metrics['memory'].get('average', 0) or 0
-        mem_p95 = metrics['memory'].get('p95', 0) or 0
 
-        # Use higher of CPU/Memory for both avg and peak
+        # Use effective_peak (which accounts for sustained vs momentary peaks)
+        cpu_effective_peak = metrics['cpu'].get('effective_peak', 0) or metrics['cpu'].get('p95', 0) or 0
+        mem_effective_peak = metrics['memory'].get('effective_peak', 0) or metrics['memory'].get('p95', 0) or 0
+
+        # Use higher of CPU/Memory for both avg and effective peak
         effective_avg = max(cpu_avg, mem_avg)
-        effective_p95 = max(cpu_p95, mem_p95)
+        effective_peak = max(cpu_effective_peak, mem_effective_peak)
 
         thresholds = config.THRESHOLDS
 
         if (effective_avg < thresholds['heavily_oversized']['avg_max'] and
-                effective_p95 < thresholds['heavily_oversized']['peak_max']):
+                effective_peak < thresholds['heavily_oversized']['peak_max']):
             return {
                 'status': 'heavily_oversized',
                 'label': 'Heavily Oversized',
@@ -247,7 +250,7 @@ class AnalyzerService:
                 'downsizing_levels': 2
             }
         elif (effective_avg < thresholds['moderately_oversized']['avg_max'] and
-              effective_p95 < thresholds['moderately_oversized']['peak_max']):
+              effective_peak < thresholds['moderately_oversized']['peak_max']):
             return {
                 'status': 'moderately_oversized',
                 'label': 'Moderately Oversized',
@@ -256,7 +259,7 @@ class AnalyzerService:
                 'downsizing_levels': 1
             }
         elif (effective_avg < thresholds['right_sized']['avg_max'] and
-              effective_p95 < thresholds['right_sized']['peak_max']):
+              effective_peak < thresholds['right_sized']['peak_max']):
             return {
                 'status': 'right_sized',
                 'label': 'Right-Sized',
@@ -347,14 +350,21 @@ class AnalyzerService:
             }
 
         # Calculate required resources with headroom
-        cpu_p95 = metrics['cpu'].get('p95', 0) or 0
-        mem_p95 = metrics['memory'].get('p95', 0) or 0
+        # Use effective_peak (which accounts for sustained vs momentary peaks)
+        cpu_effective_peak = metrics['cpu'].get('effective_peak', 0) or metrics['cpu'].get('p95', 0) or 0
+        mem_effective_peak = metrics['memory'].get('effective_peak', 0) or metrics['memory'].get('p95', 0) or 0
 
-        # Calculate required resources based on peak usage + headroom
+        # Get peak analysis info for context
+        cpu_peak_type = metrics['cpu'].get('peak_type', 'sustained')
+        mem_peak_type = metrics['memory'].get('peak_type', 'sustained')
+        cpu_peak_percentile = metrics['cpu'].get('effective_peak_percentile', 'P95')
+        mem_peak_percentile = metrics['memory'].get('effective_peak_percentile', 'P95')
+
+        # Calculate required resources based on effective peak usage + headroom
         headroom_multiplier = 1 + (config.HEADROOM_PERCENT / 100)
 
-        required_vcpus = (current_specs['vcpus'] * cpu_p95 / 100) * headroom_multiplier
-        required_memory = (current_specs['memory_gb'] * mem_p95 / 100) * headroom_multiplier
+        required_vcpus = (current_specs['vcpus'] * cpu_effective_peak / 100) * headroom_multiplier
+        required_memory = (current_specs['memory_gb'] * mem_effective_peak / 100) * headroom_multiplier
 
         # Ensure minimum resources
         required_vcpus = max(required_vcpus, 1)
@@ -386,7 +396,26 @@ class AnalyzerService:
             'cross_family': None,
             'category_optimized': None,
             'cheaper_alternative': None,
-            'best_recommendation': None
+            'best_recommendation': None,
+            # Peak analysis info
+            'peak_analysis': {
+                'cpu': {
+                    'p95': metrics['cpu'].get('p95'),
+                    'effective_peak': cpu_effective_peak,
+                    'peak_type': cpu_peak_type,
+                    'percentile_used': cpu_peak_percentile,
+                    'is_spike': metrics['cpu'].get('is_spike', False),
+                    'duration_at_p95_minutes': metrics['cpu'].get('duration_at_p95_minutes', 0)
+                },
+                'memory': {
+                    'p95': metrics['memory'].get('p95'),
+                    'effective_peak': mem_effective_peak,
+                    'peak_type': mem_peak_type,
+                    'percentile_used': mem_peak_percentile,
+                    'is_spike': metrics['memory'].get('is_spike', False),
+                    'duration_at_p95_minutes': metrics['memory'].get('duration_at_p95_minutes', 0)
+                }
+            }
         }
 
         current_family = current_specs.get('family')

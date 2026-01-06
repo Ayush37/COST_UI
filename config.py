@@ -53,6 +53,11 @@ THRESHOLDS = {
     # Above right_sized thresholds = undersized
 }
 
+# Sustained Peak Analysis Settings
+SUSTAINED_PEAK_THRESHOLD_MINUTES = 10  # Peak must be sustained for this long to be used for sizing
+SPIKE_DETECTION_GAP_PERCENT = 15  # If gap between P90 and P95 > this, it's likely a spike
+UTILIZATION_THRESHOLDS = [70, 80, 90]  # Thresholds for duration tracking
+
 # Headroom buffer for recommendations
 HEADROOM_PERCENT = 20
 

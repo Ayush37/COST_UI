@@ -405,7 +405,7 @@ function renderNodeAnalysis(nodeType, analysis) {
 }
 
 /**
- * Render metrics display
+ * Render metrics display with sustained peak analysis
  */
 function renderMetricsDisplay(metrics) {
     return `
@@ -414,7 +414,7 @@ function renderMetricsDisplay(metrics) {
                 <div class="metric-card">
                     <div class="text-muted small mb-2">CPU Utilization</div>
                     ${renderUtilizationBar('Average', metrics.cpu.average, 'cpu')}
-                    ${renderUtilizationBar('Peak (P95)', metrics.cpu.p95, 'cpu')}
+                    ${renderUtilizationBarWithPeakInfo(metrics.cpu)}
                 </div>
             </div>
             <div class="col-6">
@@ -422,12 +422,68 @@ function renderMetricsDisplay(metrics) {
                     <div class="text-muted small mb-2">Memory Utilization</div>
                     ${metrics.memory.available ? `
                         ${renderUtilizationBar('Average', metrics.memory.average, 'mem')}
-                        ${renderUtilizationBar('Peak (P95)', metrics.memory.p95, 'mem')}
+                        ${renderUtilizationBarWithPeakInfo(metrics.memory)}
                     ` : `
                         <div class="text-muted small">Memory metrics not available</div>
                     `}
                 </div>
             </div>
+        </div>
+    `;
+}
+
+/**
+ * Render utilization bar with peak analysis info
+ */
+function renderUtilizationBarWithPeakInfo(metricData) {
+    if (!metricData || !metricData.available) {
+        return renderUtilizationBar('Peak', null, 'generic');
+    }
+
+    const p95 = metricData.p95;
+    const effectivePeak = metricData.effective_peak || p95;
+    const peakType = metricData.peak_type || 'sustained';
+    const percentileUsed = metricData.effective_peak_percentile || 'P95';
+    const isSpike = metricData.is_spike || false;
+    const durationAtP95 = metricData.duration_at_p95_minutes || 0;
+
+    // Determine the label and indicator based on peak type
+    let peakLabel = `Peak (${percentileUsed})`;
+    let peakIndicator = '';
+    let peakNote = '';
+
+    if (peakType === 'momentary') {
+        peakIndicator = '<span class="badge bg-warning text-dark ms-1" title="Peak was momentary (<10 min)">Momentary</span>';
+        peakNote = `<div class="small text-warning mt-1"><i class="bi bi-lightning"></i> P95 (${p95?.toFixed(1)}%) lasted only ${durationAtP95.toFixed(0)} min - using ${percentileUsed} for sizing</div>`;
+    } else if (peakType === 'moderate') {
+        peakIndicator = '<span class="badge bg-info text-dark ms-1" title="Peak was moderately sustained">Moderate</span>';
+        peakNote = `<div class="small text-info mt-1"><i class="bi bi-clock"></i> Using ${percentileUsed} (${effectivePeak?.toFixed(1)}%) for sizing</div>`;
+    } else if (isSpike) {
+        peakIndicator = '<span class="badge bg-secondary ms-1" title="Spike detected between P90 and P95">Spike</span>';
+    }
+
+    // Show P95 value if different from effective peak
+    let p95Info = '';
+    if (effectivePeak !== p95 && p95 !== null) {
+        p95Info = `<div class="small text-muted">Raw P95: ${p95.toFixed(1)}%</div>`;
+    }
+
+    let barClass = 'low';
+    if (effectivePeak >= 60) barClass = 'optimal';
+    else if (effectivePeak >= 40) barClass = 'medium';
+    else if (effectivePeak >= 70) barClass = 'high';
+
+    return `
+        <div class="utilization-bar-container">
+            <div class="utilization-bar-label">
+                <span>${peakLabel}${peakIndicator}</span>
+                <span>${effectivePeak?.toFixed(1) || 'N/A'}%</span>
+            </div>
+            <div class="utilization-bar">
+                <div class="utilization-bar-fill ${barClass}" style="width: ${Math.min(effectivePeak || 0, 100)}%"></div>
+            </div>
+            ${p95Info}
+            ${peakNote}
         </div>
     `;
 }
@@ -658,7 +714,7 @@ function renderRecommendations(recommendations) {
 
     html += '</div>';
 
-    // Requirements info
+    // Requirements info with peak analysis
     if (recommendations.required_vcpus && recommendations.required_memory_gb) {
         html += `
             <div class="mt-3 small text-muted">
@@ -666,6 +722,32 @@ function renderRecommendations(recommendations) {
                 Calculated requirements with 20% headroom: ${recommendations.required_vcpus} vCPUs, ${recommendations.required_memory_gb} GB RAM
             </div>
         `;
+    }
+
+    // Peak analysis summary
+    if (recommendations.peak_analysis) {
+        const cpuPeak = recommendations.peak_analysis.cpu;
+        const memPeak = recommendations.peak_analysis.memory;
+
+        let peakNotes = [];
+        if (cpuPeak && cpuPeak.peak_type !== 'sustained') {
+            peakNotes.push(`CPU: Using ${cpuPeak.percentile_used} (${cpuPeak.effective_peak?.toFixed(1)}%) instead of P95 (${cpuPeak.p95?.toFixed(1)}%) - peak was ${cpuPeak.peak_type}`);
+        }
+        if (memPeak && memPeak.peak_type !== 'sustained') {
+            peakNotes.push(`Memory: Using ${memPeak.percentile_used} (${memPeak.effective_peak?.toFixed(1)}%) instead of P95 (${memPeak.p95?.toFixed(1)}%) - peak was ${memPeak.peak_type}`);
+        }
+
+        if (peakNotes.length > 0) {
+            html += `
+                <div class="mt-2 p-2 bg-light rounded">
+                    <div class="small">
+                        <i class="bi bi-info-circle text-info me-1"></i>
+                        <strong>Peak Analysis Adjustment:</strong>
+                    </div>
+                    ${peakNotes.map(note => `<div class="small text-muted ms-3">• ${note}</div>`).join('')}
+                </div>
+            `;
+        }
     }
 
     return html;
