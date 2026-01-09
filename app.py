@@ -15,8 +15,14 @@ analyzer_service = AnalyzerService()
 
 @app.route('/')
 def index():
-    """Render the main dashboard"""
-    return render_template('index.html')
+    """Render the main landing page"""
+    return render_template('home.html', active_service=None)
+
+
+@app.route('/emr')
+def emr():
+    """Render the EMR cost optimizer dashboard"""
+    return render_template('emr.html', active_service='emr')
 
 
 @app.route('/api/config/lookback-options', methods=['GET'])

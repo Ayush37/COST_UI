@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block title %}Cost Recommendation Engine - Infrastructure Overview{% endblock %}
+
+{% block content %}
+<div class="home-container">
+    <!-- Page Header -->
+    <div class="page-header">
+        <h1 class="page-title">Infrastructure Overview</h1>
+    </div>
+
+    <!-- Estimated Savings Card -->
+    <div class="savings-overview-card">
+        <div class="savings-overview-header">
+            <div class="savings-overview-label">Estimated Savings</div>
+        </div>
+        <div class="savings-overview-body">
+            <div class="savings-main">
+                <span class="savings-amount" id="total-savings-amount">$0</span>
+                <span class="savings-period">/month</span>
+            </div>
+            <div class="savings-progress-container">
+                <div class="savings-progress">
+                    <div class="savings-progress-bar" id="savings-progress-bar" style="width: 0%"></div>
+                </div>
+                <span class="savings-progress-label" id="savings-progress-label">0% optimization potential</span>
+            </div>
+            <div class="savings-meta">
+                <span class="savings-meta-text">
+                    Based on <strong id="active-services-count">1</strong> active service
+                    <span class="savings-meta-separator">|</span>
+                    <strong id="resources-analyzed-count">0</strong> resources analyzed
+                </span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading State -->
+    <div id="home-loading" class="text-center py-4">
+        <div class="spinner-border spinner-border-sm text-secondary" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+        <span class="ms-2 text-muted small">Loading savings data...</span>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    document.addEventListener('DOMContentLoaded', async function() {
+        await loadSavingsOverview();
+    });
+
+    async function loadSavingsOverview() {
+        try {
+            // Fetch EMR clusters to calculate potential savings
+            const response = await fetch('/api/clusters');
+            const result = await response.json();
+
+            if (result.success) {
+                const totalClusters = result.data.total_count || 0;
+                const terminatedCount = result.data.terminated_count || 0;
+
+                // Update resources analyzed
+                document.getElementById('resources-analyzed-count').textContent = totalClusters + terminatedCount;
+
+                // Try to get savings from analysis history
+                const historyResponse = await fetch('/api/analysis/history');
+                const historyResult = await historyResponse.json();
+
+                let totalSavings = 0;
+                let analyzedCount = 0;
+
+                if (historyResult.success && historyResult.data) {
+                    // Sum up savings from all cluster analyses
+                    for (const clusterId in historyResult.data) {
+                        const analyses = historyResult.data[clusterId];
+                        if (analyses && analyses.length > 0) {
+                            const latestAnalysis = analyses[0];
+                            if (latestAnalysis.total_potential_monthly_savings) {
+                                totalSavings += latestAnalysis.total_potential_monthly_savings;
+                                analyzedCount++;
+                            }
+                        }
+                    }
+                }
+
+                // Update UI
+                document.getElementById('total-savings-amount').textContent = '$' + totalSavings.toLocaleString();
+
+                // Calculate and display optimization potential (rough estimate)
+                // Assuming average 30-40% optimization potential for oversized resources
+                const optimizationPercent = analyzedCount > 0 ? Math.min(Math.round((totalSavings / (totalSavings / 0.35)) * 100), 100) : 0;
+                document.getElementById('savings-progress-bar').style.width = optimizationPercent + '%';
+                document.getElementById('savings-progress-label').textContent = optimizationPercent + '% optimization potential';
+            }
+        } catch (error) {
+            console.error('Failed to load savings overview:', error);
+        } finally {
+            document.getElementById('home-loading').classList.add('d-none');
+        }
+    }
+</script>
+{% endblock %}
